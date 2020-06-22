@@ -1,0 +1,344 @@
+---
+title: "Post hoc inference for differential gene expression studies"
+description: |
+    This vignette illustrates the use of post hoc inference methods for differential expression studies in genomics
+author:
+  - name: Pierre Neuvial
+    url: https://math.univ-toulouse.fr/~pneuvial
+    affiliation: Institut de Mathématiques de Toulouse
+    affiliation_url: https://math.univ-toulouse.fr
+date: "`r Sys.Date()`"
+output: 
+  distill::distill_article:
+    toc: true
+    toc_depth: 2
+header-includes:
+- \newcommand{\cH}{\mathcal{H}}
+- \renewcommand{\P}{\mathbb{P}}
+- \newcommand{\oV}{\overline{V}}
+bibliography: sansSouci.bib
+---
+
+# Introduction
+
+We recall the classical paradigm of False Discovery Rate control for differential gene expression studies, and pinpoint intrinsic limitations to this paradigm. Then we briefly introduce the framework of post hoc inference, which aims at addressing these limitations. The applicative example is taken from @blanchard:book-chap.
+
+
+```{r knitr-setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The methods presented in this document are implemented in the development version of the R package `sansSouci`, which is available from github:
+
+```{r install-sansSouci, eval = FALSE}
+remotes::install_github("pneuvial/sanssouci@develop")
+```
+
+
+```{r setup}
+library("sansSouci")
+```
+
+## Motivation: a differential gene expression study
+
+We focus on differential gene expression studies in cancerology. These studies aim at identifying genes whose mean expression level differs significantly between two (or more) populations, based on a sample of gene expression measurements from individuals from these populations. Specifically, we consider a data set studied in \cite{bourgon10independent}
+
+```{r read-data}
+data_url <- url("https://plmbox.math.cnrs.fr/f/755496cc4c154a6dbab0/?dl=1")
+dat <- readRDS(data_url)
+```
+
+This data set which consists of gene expression measurements for  $n = `r ncol(dat)`$ patients with B-cell acute lymphoblastic leukemia (ALL) @chiaretti04gene,@chiaretti05gene. These patients are classified into two subgoups, depending on whether or not they harbor a specific mutation called "BCR/ABL":
+
+```{r}
+table(colnames(dat))
+```
+
+```{r}
+mut <- "BCR/ABL"
+```
+
+
+The goal of this study is to understand the molecular differences at the gene expression level between the populations of BCR/ABL positive and negative ("NEG") patients. For each patient, we observe a vector of `r nrow(dat)` gene expression values. 
+
+The most basic question to ask is: 
+
+> For which genes is there a difference in the mean expression level of the mutated and non-mutated population? 
+
+This question can be addressed by performing one statistical test of no difference between means for each gene, and to define "differentially expressed" genes as those passing some significance threshold. One important concern here is the calibration of the significance threshold.
+
+## Classical differential analysis
+
+We start with a simple Welch test for differential expression for each gene. This can be done e.g. using the `sansSouci::rowWelchTests` function:
+
+```{r row-welch-tests}
+categ <- ifelse(colnames(dat) == "BCR/ABL", 1, 0) # map to 0/1
+rwt <- sansSouci::rowWelchTests(dat, categ)
+class(rwt) <- "list"
+dex <- as.data.frame(rwt)
+rm(rwt)
+pval <- dex[["p.value"]]
+```
+
+
+We plot a histogram of the corresponding $p$-values:
+
+```{r hist}
+hist(pval, probability = TRUE, breaks = 20,
+     xlab = "p-value", main = "p-value distributon")
+```
+
+As expected, the distribution presents a large number of small $p$-values (which include signals, i.e. differentially expressed genes) mixed with uniformly distributed $p$-values (corresponding to non-differentially expressed genes). Accordingly, the $p$-values are transformed into a standard normal scale, the density of these statistics (in red) deviates from the standard normal distribution:
+
+```{r test-stat-normal}
+stat <- qnorm(1 - pval)
+curve(dnorm, -4, 8, lty = 2, lwd = 2)
+lines(density(stat), col = 2, lwd = 2)
+```
+
+### Multiple testing correction: False Discovery Rate control
+
+The state of the art approach to large-scale multiple testing is to control the False Discovery Rate (FDR), which is the expected proportion of wrongly selected genes (false positives) among all selected genes @benjamini95controlling. The most widely used method to control this risk is the Benjamini-Hochberg (BH) procedure, which has been shown to control the FDR when the hypotheses corresponding to the non-differentially expressed genes are independent @benjamini95controlling or satisfy a specific type of positive dependence called Positive Regression Dependence on the Subset $\mathcal{H}_0$ of truly non-differentially expressed genes @benjamini01control.
+
+```{r bh}
+q <- 0.05
+adjp.BH <- p.adjust(pval, method = "BH")
+nBH <- sum(adjp.BH <= q)
+dex$adjp.BH <- adjp.BH
+```
+
+```{r, layout="l-body-outset", echo=FALSE}
+ww <- which(adjp.BH <= q)
+o <- order(dex[["p.value"]])
+odex <- dex[head(o, nBH), ]
+rmarkdown::paged_table(odex, options = list(rows.print = 20))
+```
+
+## Caveats of FDR control
+
+### Caveat 1: FDR control prescribes a list of significant genes
+
+In this data set, `r nBH` genes are called differentially expressed at a False Discovery Rate (FDR) of $q = `r q`$. An investigator given such a list will generally be interested in refined and/or interpreting this list by combining it with \emph{prior knowledge} on the problem at hand. For example, the investigator may not be interested in genes whose global expression level is small, or they may be interested in only a subset $S$ of the list, or they may be interested in combining such an $S$ with other genes which are below the significance threshold, but share some biological properties with the genes of $S$. Unfortunately, *FDR control on the list provides no guarantee on such user-refined gene lists*. 
+
+### Caveat 2: Difficulty of interpretation of FDR control
+
+The fact that `r nBH` genes are called differentially expressed at a False Discovery Rate (FDR) of $q = `r q`$ does not mean that the proportion of false positives in this list, which is called the FDP for False Discovery Proportion, is less than `r nBH*q`. Indeed, the FDP is a *random* quantity, on which we can only have a probabilistic control. The FDR is defined as the  *expected* FDP. Intuitively, FDR$\leq q$ means that the average FDP over hypothetical replications of the same genomic experiment and $p$-value thresholding procedure, is bounded by $q$. By construction, controlling FDR for a given data set does not give much information as to the FDP in this data set. 
+
+# Post hoc inference
+
+In order to address these important limitations, @GS2011 have popularized the concept of "post hoc inference". This approach elaborates on the theory of multiple testing in order to build confidence bounds on *arbitrary* subsets of hypotheses. Formally, let $\cH$ be a set of $m$ null hypotheses, and $\cH_0$ be the (unknown) subset of true null hypotheses. Then for $S \subset \cH$, $|S \cap \cH_0|$ is the number of false positives in $S$. With this notation, $\oV$ is a post hoc upper bound at confidence level $\alpha$ if
+
+$$\P(\forall S \subset \cH,  \quad |S \cap \cH_0| \leq \oV(S)) \geq 1-\alpha$$
+That is, there exists an event of probability $1-\alpha$ such that *for any subset $S$ of hypotheses* -possibly data-driven or cherry-picked by a user, the number of false positives in $S$ is less than $V(S)$.
+
+**[TODO: By-product: Confidence envelopes from the FDP]**
+
+Post hoc inference may seem an excessively ambitious goal. Following earlier works by @genovese2006exceedance, @GS2011 have proposed a general framework based on closed testing in order to build such bounds. In particular, they provide such a bound in the case where the tested hypotheses satisfy the PRDS assumption (that is, under the same assumptions as those under which FDR control is valid). We refer to @sarkar98probability for a formal definition of PRDS. It was later shown in @blanchard:posthoc that such post hoc bounds can be obtained as a consequence of the control of a multiple testing risk called the Joint Error Rate (JER). In particular, under PRDS, they recover the bound of @GS2011 under PRDS as a corollary of the Simes inequality @simes86improved, a probabilistic inequality that plays an important role in multiple testing.
+
+Our goal is to illustrate two main points:
+
+1. the general interest of such post-hoc bounds, by showing that they provide an investigator with interpretable and practically useful 
+1. the fact that improved bounds (with respect to the original @GS2011 bounds) may be improved in the specific case of two-sample tests for differential gene expression studies.
+
+# Confidence envelopes on "top-$k$" lists
+
+In the absence of prior information on genes, a natural idea is to rank them by decreasing statistical significance, and a natural question to ask is: can we provide a lower confidence envelope on the number (or proportion) of truly differentially expressed genes among the "top $k$" genes, for a user-defined $k$?
+
+We illustrate the use of post-hoc methods to provide this type of information. More specifcally, we build confidence statements on the number of true/false positives within the top $k$ most significant genes in a differential gene expression study, where $k$ may be defined by the user after seing the data, and multiple choices of $k$ are allowed. 
+
+We start by defining a target confidence level:
+
+```{r conf-level}
+alpha <- 0.1
+```
+
+The method of @GS2011 makes it possible to calculate a confidence envelope on the number of true positives among the most significant genes:
+
+```{r, echo=FALSE}
+m <- length(stat)
+o <- order(stat, decreasing = TRUE)
+thr <- SimesThresholdFamily(m)(alpha)
+max_FP <- curveMaxFP(stat[o], thr)
+prop_FP <- max_FP/1:m
+min_TP <- 1:m - max_FP[1:m]
+bmax <- min_TP[m]
+Kmax <- min(which(min_TP == bmax))
+q <- 0.05
+Kprop <- max(which(prop_FP <= q))
+Kmin <- max(which(max_FP == 0))
+plot(1:(2*Kmax), min_TP[1:(2*Kmax)], 
+     t = 's', lwd = 2,
+     xlab = "Number of top genes selected called significant",
+     ylab = "Lower bound on #TP")
+abline(a = 0, b = 1, lty = 2)
+ntops <- c(Kmin, round((Kmin+Kmax)/2), Kmax, Kprop)
+cols <- 1 + seq_along(ntops)
+for (nn in seq_along(ntops)) {
+  ntop <- ntops[nn]
+  segments(x0 = ntop, y0 = 0, y1 = min_TP[ntop], 
+           col = cols[nn], lwd = 2, lty = 2)
+  segments(x0 = 0, x1 = ntop, y0 = min_TP[ntop], 
+           col = cols[nn], lwd = 2, lty = 2)
+}
+```
+
+```{r, include = FALSE}
+ntop <- ntops[2]
+```
+
+The above plot should be interpreted as follows: among the `r ntop` most significant genes (ie those with smallest $p$-value), we can guarantee with `r 100*(1-alpha)`% confidence that the proportion of true positives is larger than `r min_TP[ntop]`, or equivalently, that the proportion of true positives is larger than `r round(min_TP[ntop]/ntop, 1)`.
+
+
+Importantly, this guarantee holds *simultaneously* for all possible choices for the number of top genes. That is, we can for example guarantee with `r 100*(1-alpha)`% confidence that the following statements hold simultaneously:
+
+- among the top `r ntops[1]` genes, there is no false positive;
+- among the top `r ntops[2]` genes, the number of true positives is larger than `r min_TP[ntops[2]]`;
+- among the top `r ntops[3]` genes, the number of true positives is larger than `r min_TP[ntops[3]]`.
+
+## Comparison to FDR control
+
+Let us compare this with the result of the classical approach based on False Discovery Rate control.
+
+
+### Interpretability of the output of a FDR controlling procedure
+
+The first `r nBH` genes are called differentially expressed. The above post hoc approach ensures with `r 100*(1-alpha)`% confidence that the proportion of false positives in this list is less than `r round(max_FP[nBH]/nBH, 1)`.  This is a probabilistic statement about this particular list.  
+
+In contrast, FDR control guarantees that the proportion of false positives among the first `r nBH` genes is less than `r q`. This is a statement *on average over hypothetical replications of this gene expression study*, which therfore has limited interpretability.
+
+
+Note that this is limitation of the interpretability of FDR controlling procedures in general, which is by no means specific to the BH procedure.
+
+### Post hoc choice of the number of top genes
+
+```{r, include = FALSE}
+Kprop <- max(which(prop_FP <= q))
+```
+
+The above figure shows that the lower bound on the number of true positives is constant (equal to `r min_TP[Kmax]`) after `r Kmax` genes. This indicates that choosing the top `r nBH` genes, as suggested by the BH procedure, may not be the best choice for this data set. A very appealing feature of the post hoc approach is that it lets the user of the procedure choose the number of top genes that they will consider *after the data analysis is performed* (hence the name *post hoc*). In this particular example, a user can choose *after looking at the above plot* between reporting first `r ntops[1]` genes (among which with high probability, there is no false positive ), and the first `r ntops[3]` genes (among which with high probability, there are at most `r max_FP[ntops[3]]` false positives, ie the FDP is less than `r round(max_FP[ntops[3]]/ntops[3], 2)`%).  If the user is interested in a list in which the proportion of false positives is less than `r q` with high probability, then they can read from the above plot that the top `r Kprop` genes have this property.
+
+In contrast, the FDR approach is not post hoc. Specifically, once the BH procedure has been applied at a given level, the only information we have is about one single list of `r nBH` genes. In particular, if we are interested in "top $k$" lists with $k \neq$ `r nBH`, the only thing we can say is that the FDR in a list with $k <$ `r nBH` is less than `r q`, and that the FDR in a list with $k >$ `r nBH` is larger than `r q`.
+
+# Inference on data-driven sets of genes
+
+In this section we illustrate how post hoc inference may be used to provide confidence statements on the number of true/false positives within sets of genes selected in a data-driven way, e.g. by penalized linear regression methods such as the Lasso or Elastic net. 
+
+## Penalized logistic regression
+
+We consider the following logistic regression model:
+
+**TODO: introduce notation $y$, $X$, $\beta$, etc**
+
+<!-- - $y \in \{0,1\}^n$ encode the class labels, e.g. 0 for "NEG" and 1 for "BCR/ABL" -->
+
+We apply logistic lasso and elastic net regression in order to identify a subset of genes that can predict the "BCR/ABL" vs "NEG" status of a patient from their expression level. 
+  
+```{r glmnet}
+library("glmnet")
+y <- colnames(dat)
+x <- t(dat)
+fitL <- glmnet(x, y, alpha = 1, family = "binomial")
+fitE <- glmnet(x, y, alpha = 0.5, family = "binomial")
+```
+
+Below are shown the regularization paths of the Lasso and Elastic net. 
+
+```{r, plot-lasso}
+plot(fitL, main = "Lasso regularization path")
+```
+
+```{r,plot-elnet}
+plot(fitE, main = "Elastic net regularization path")
+```
+
+## Confidence envelopes on regularization paths
+
+Here, we use the post hoc approach introduced by @GS2011 to calculate, for each point in the Lasso and Elastic net regularization paths, the bounds on the number of true/false positives associated to the corresponding active set. 
+
+The function below returns the desired bounds from the output of the `glmnet` package:
+
+```{r}
+RSbar <- function(pred, fit) {
+  beta <- fit$beta
+  non0 <- colSums(beta != 0)
+  ww <- max(which(non0 <= pred))
+  ids <- which(beta[, ww] != 0)
+  Sbar <- posthocBySimes(pval, select = ids, alpha = 0.05)
+  c(R = length(ids), Sbar = Sbar) #, FDPbar = (R - Sbar)/max(R, 1) 
+}
+```
+<!-- TODO: small bug in RSbar: 'ids' may be empty while ww is not (e.g. ww = 0, 2,... and no 1) -->
+
+We focus on the first variables in the active set:
+
+```{r}
+npred <- 30
+```
+
+
+```{r calc-bound-data}
+stats <- sapply(1:npred, RSbar, fitL)
+stats <- data.frame(Sbar = stats["Sbar", ], R = stats["R", ])
+stats$FDPbar <- (stats$R-stats$Sbar)/pmax(stats$R, 1)
+statsL <- data.frame(stats, method = "lasso")
+
+stats <- sapply(1:npred, RSbar, fitE)
+stats <- data.frame(Sbar = stats["Sbar", ], R = stats["R", ])
+stats$FDPbar <- (stats$R-stats$Sbar)/pmax(stats$R, 1)
+statsE <- data.frame(stats, method = "Elastic net (0.5)")
+
+stats <- rbind(statsL, statsE)
+```
+
+
+We plot the obtained lower bound on the number of true positives as a function of the number of genes in the predictor:
+  
+  
+```{r plot-bound-data-TP , echo=FALSE}
+library("ggplot2")
+p <- ggplot(stats, aes(y = Sbar, x = R, group = method, color = method)) +
+  geom_line(na.rm = TRUE) + 
+  ylab("Lower bound on the #TP") + xlab("Number of variables selected")
+p
+```
+
+With the same data, we can plot the corresponding upper bound on the False Discovery Proportion:
+  
+```{r plot-bound-data-FDP, echo=FALSE}
+q <- 0.2
+p <- ggplot(stats, aes(y = FDPbar, x = R, group = method, color = method)) +
+  geom_line(na.rm = TRUE) + 
+  ylab("Upper bound on the FDP") + xlab("Number of variables selected") +
+  geom_hline(yintercept = q, linetype = "dotted")
+p
+```
+
+
+These plots make it possible to perform a post hoc choice of the regularization parameter $\lambda$, which controls the number of variables selected for both Lasso and Elastic net. For example, if we want the selected variables to contain at most `r q*100`% of false positives, then we should select the first 20 variables in the regularization path of the Elastic net, or the first 7 variables in the regularization path of the Lasso.
+
+*The fact that the confidence envelope for the FDP is lower for the elastic net does not directly imply that that this method is better than the lasso. It is a consequence of the fact that by construction, the lasso will tend to select only one variable within a group of highly correlated variables, whereas the ridge penalty in the elastic net will allow correlated variables to be selected. Therefore, it is expected that if one retains a fixed number of variables, the lasso will select variables with weaker effects than the elastic net.*
+
+# Adapting to dependence: gains in power by randomization
+
+Just like the BH method for FDR control, the above post hoc bounds rely on the PRDS assumption. In the case of differential gene expression studies, it is generally acknowledged that this  assumption is valid. However, we note it is generally not possible to formally prove that is indeed the case for a particular data set. Another caveat is that even in situations where this assumption holds, the corresponding post hoc bounds may be overly conservative.
+
+**TODO: simulation study to illustrate this point?**
+
+In order to address these limitations, @blanchard:posthoc have proposed to use randomization techniques introduced by @RW05 and recently refined in @hemerik2018exact in order to build bounds that are adaptive to the specific type or intensity of dependence in a particular data set.
+
+In the case of differential expression studies, these methods can be implemented by class label permutation. Intuitively, such permutations cancel the biological signal of differential expression. Importantly, because the same permutation is performed for all genes, the dependence between hypotheses (here, genes) is not affected by the randomization process. Thus performing the same differential analysis after permutation emulates the *joint null distribution* of the test statistics, which makes it possible to calibrate post hoc bounds for a particular data set. This is described in detail in Supplementary section S-5 of @blanchard:posthoc, and illustrated below. A closely related approach is also proposed in @hemerik2019permutation. These methods are also tightly related to the resampling-based techniques popularized by @WY93 in the multiple testing community. 
+
+```{r randomization}
+cal <- calibrateJER(dat, B = 1e3, alpha = alpha)
+cal$lambda
+```
+
+In a nutshell, this calibration can be interpreted as follows: for the @chiaretti04gene data set, at the `r 100*(1-alpha)`% confidence level, the above post hoc bounds based on the Simes inequality can be applied *for free* at level `r floor(cal$lambda*100)/100` confidence level instead of `r alpha`. In this particular example, this corresponds to a massive gain in power, due to the fact that the Simes inequality is overly conservative for this particular data set which exhibits substantial positive dependence.
+
+**TODO: illustrations: confidence enveloppe, lassso bounds, volcano plot**
+
+# Session information
+
+```{r session-info}
+sessionInfo()
+```
