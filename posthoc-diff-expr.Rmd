@@ -50,11 +50,8 @@ dat <- readRDS(data_url)
 
 This data set which consists of gene expression measurements for  $n = `r ncol(dat)`$ patients with B-cell acute lymphoblastic leukemia (ALL) @chiaretti04gene,@chiaretti05gene. These patients are classified into two subgoups, depending on whether or not they harbor a specific mutation called "BCR/ABL":
 
-```{r}
+```{r colnames}
 table(colnames(dat))
-```
-
-```{r}
 mut <- "BCR/ABL"
 ```
 
@@ -107,7 +104,7 @@ nBH <- sum(adjp.BH <= q)
 dex$adjp.BH <- adjp.BH
 ```
 
-```{r, layout="l-body-outset", echo=FALSE}
+```{r bh-table, layout="l-body-outset", echo=FALSE}
 ww <- which(adjp.BH <= q)
 o <- order(dex[["p.value"]])
 odex <- dex[head(o, nBH), ]
@@ -131,8 +128,6 @@ In order to address these important limitations, @GS2011 have popularized the co
 $$\P(\forall S \subset \cH,  \quad |S \cap \cH_0| \leq \oV(S)) \geq 1-\alpha$$
 That is, there exists an event of probability $1-\alpha$ such that *for any subset $S$ of hypotheses* -possibly data-driven or cherry-picked by a user, the number of false positives in $S$ is less than $V(S)$.
 
-**[TODO: By-product: Confidence envelopes from the FDP]**
-
 Post hoc inference may seem an excessively ambitious goal. Following earlier works by @genovese2006exceedance, @GS2011 have proposed a general framework based on closed testing in order to build such bounds. In particular, they provide such a bound in the case where the tested hypotheses satisfy the PRDS assumption (that is, under the same assumptions as those under which FDR control is valid). We refer to @sarkar98probability for a formal definition of PRDS. It was later shown in @blanchard:posthoc that such post hoc bounds can be obtained as a consequence of the control of a multiple testing risk called the Joint Error Rate (JER). In particular, under PRDS, they recover the bound of @GS2011 under PRDS as a corollary of the Simes inequality @simes86improved, a probabilistic inequality that plays an important role in multiple testing.
 
 Our goal is to illustrate two main points:
@@ -154,7 +149,7 @@ alpha <- 0.1
 
 The method of @GS2011 makes it possible to calculate a confidence envelope on the number of true positives among the most significant genes:
 
-```{r, echo=FALSE}
+```{r plot-conf-envelope, echo=FALSE}
 m <- length(stat)
 o <- order(stat, decreasing = TRUE)
 thr <- SimesThresholdFamily(m)(alpha)
@@ -182,7 +177,7 @@ for (nn in seq_along(ntops)) {
 }
 ```
 
-```{r, include = FALSE}
+```{r ntop, include = FALSE}
 ntop <- ntops[2]
 ```
 
@@ -211,7 +206,7 @@ Note that this is limitation of the interpretability of FDR controlling procedur
 
 ### Post hoc choice of the number of top genes
 
-```{r, include = FALSE}
+```{r Kprop, include = FALSE}
 Kprop <- max(which(prop_FP <= q))
 ```
 
@@ -243,11 +238,11 @@ fitE <- glmnet(x, y, alpha = 0.5, family = "binomial")
 
 Below are shown the regularization paths of the Lasso and Elastic net. 
 
-```{r, plot-lasso}
+```{r plot-lasso}
 plot(fitL, main = "Lasso regularization path")
 ```
 
-```{r,plot-elnet}
+```{r plot-elnet}
 plot(fitE, main = "Elastic net regularization path")
 ```
 
@@ -257,7 +252,7 @@ Here, we use the post hoc approach introduced by @GS2011 to calculate, for each 
 
 The function below returns the desired bounds from the output of the `glmnet` package:
 
-```{r}
+```{r calc-bound-FUN}
 RSbar <- function(pred, fit) {
   beta <- fit$beta
   non0 <- colSums(beta != 0)
@@ -271,7 +266,7 @@ RSbar <- function(pred, fit) {
 
 We focus on the first variables in the active set:
 
-```{r}
+```{r number-predictors}
 npred <- 30
 ```
 
