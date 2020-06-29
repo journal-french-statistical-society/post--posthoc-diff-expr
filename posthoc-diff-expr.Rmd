@@ -39,6 +39,13 @@ remotes::install_github("pneuvial/sanssouci@develop")
 library("sansSouci")
 ```
 
+```{r required-packages}
+library("tidyr")
+library("ggplot2")
+library("plotly")
+```
+
+
 ## Motivation: a differential gene expression study
 
 We focus on differential gene expression studies in cancerology. These studies aim at identifying genes whose mean expression level differs significantly between two (or more) populations, based on a sample of gene expression measurements from individuals from these populations. Specifically, we consider a data set studied in \cite{bourgon10independent}
@@ -70,10 +77,7 @@ We start with a simple Welch test for differential expression for each gene. Thi
 
 ```{r row-welch-tests}
 categ <- ifelse(colnames(dat) == "BCR/ABL", 1, 0) # map to 0/1
-rwt <- sansSouci::rowWelchTests(dat, categ)
-class(rwt) <- "list"
-dex <- as.data.frame(rwt)
-rm(rwt)
+dex <- sansSouci::rowWelchTests(dat, categ)
 pval <- dex[["p.value"]]
 ```
 
@@ -150,69 +154,39 @@ alpha <- 0.1
 The method of @GS2011 makes it possible to calculate a confidence envelope on the number of true positives among the most significant genes:
 
 ```{r plot-conf-envelope, echo=FALSE}
-m <- length(stat)
-o <- order(stat, decreasing = TRUE)
-thr <- SimesThresholdFamily(m)(alpha)
-max_FP <- curveMaxFP(stat[o], thr)
-prop_FP <- max_FP/1:m
-min_TP <- 1:m - max_FP[1:m]
-bmax <- min_TP[m]
-Kmax <- min(which(min_TP == bmax))
-q <- 0.05
-Kprop <- max(which(prop_FP <= q))
-Kmin <- max(which(max_FP == 0))
-plot(1:(2*Kmax), min_TP[1:(2*Kmax)], 
-     t = 's', lwd = 2,
-     xlab = "Number of top genes selected called significant",
-     ylab = "Lower bound on #TP")
-abline(a = 0, b = 1, lty = 2)
-ntops <- c(Kmin, round((Kmin+Kmax)/2), Kmax, Kprop)
-cols <- 1 + seq_along(ntops)
-for (nn in seq_along(ntops)) {
-  ntop <- ntops[nn]
-  segments(x0 = ntop, y0 = 0, y1 = min_TP[ntop], 
-           col = cols[nn], lwd = 2, lty = 2)
-  segments(x0 = 0, x1 = ntop, y0 = min_TP[ntop], 
-           col = cols[nn], lwd = 2, lty = 2)
-}
+conf_env <- confidenceEnvelope(stat = stat, refFamily = "Simes", alpha = alpha) 
+Kmax <- 250
+conf_env_tidy <- gather(conf_env, "stat", "posthoc_bound", -"x") %>%
+  filter(stat %in% c("TP", "FDP"), 
+         x <= Kmax) %>%
+  rename(nb_top_genes = x)
+
+p <- ggplot(conf_env_tidy, aes(x = nb_top_genes, y = posthoc_bound)) +
+  geom_line() +
+  facet_grid(stat ~ ., scales = "free_y") +
+  labs(x = "#top genes called significant", y = "")
+ggplotly(p)
 ```
 
-```{r ntop, include = FALSE}
-ntop <- ntops[2]
+```{r ntop}
+ntop <- 100
 ```
 
-The above plot should be interpreted as follows: among the `r ntop` most significant genes (ie those with smallest $p$-value), we can guarantee with `r 100*(1-alpha)`% confidence that the proportion of true positives is larger than `r min_TP[ntop]`, or equivalently, that the proportion of true positives is larger than `r round(min_TP[ntop]/ntop, 1)`.
+
+The above plot should be interpreted as follows: among the `r ntop` most significant genes (ie those with smallest $p$-value), we can guarantee with `r 100*(1-alpha)`% confidence that the number of true positives is larger than `r conf_env[ntop, "TP"]`, or equivalently, that the proportion of false positives is less than `r ceiling(100*conf_env[ntop, "TP"])/100`.
 
 
 Importantly, this guarantee holds *simultaneously* for all possible choices for the number of top genes. That is, we can for example guarantee with `r 100*(1-alpha)`% confidence that the following statements hold simultaneously:
 
-- among the top `r ntops[1]` genes, there is no false positive;
-- among the top `r ntops[2]` genes, the number of true positives is larger than `r min_TP[ntops[2]]`;
-- among the top `r ntops[3]` genes, the number of true positives is larger than `r min_TP[ntops[3]]`.
-
-## Comparison to FDR control
-
-Let us compare this with the result of the classical approach based on False Discovery Rate control.
-
-
-### Interpretability of the output of a FDR controlling procedure
-
-The first `r nBH` genes are called differentially expressed. The above post hoc approach ensures with `r 100*(1-alpha)`% confidence that the proportion of false positives in this list is less than `r round(max_FP[nBH]/nBH, 1)`.  This is a probabilistic statement about this particular list.  
-
-In contrast, FDR control guarantees that the proportion of false positives among the first `r nBH` genes is less than `r q`. This is a statement *on average over hypothetical replications of this gene expression study*, which therfore has limited interpretability.
-
-
-Note that this is limitation of the interpretability of FDR controlling procedures in general, which is by no means specific to the BH procedure.
-
-### Post hoc choice of the number of top genes
-
-```{r Kprop, include = FALSE}
-Kprop <- max(which(prop_FP <= q))
+```{r ntops, include=FALSE}
+q <- 0.1
+Kprop <- max(which(conf_env[, "FDP"] <= q))
+Kmin <- max(which(conf_env[, "FP"] == 0))
+Kmax <- min(which(conf_env[, "TP"] == max(conf_env[, "TP"])))
 ```
 
-The above figure shows that the lower bound on the number of true positives is constant (equal to `r min_TP[Kmax]`) after `r Kmax` genes. This indicates that choosing the top `r nBH` genes, as suggested by the BH procedure, may not be the best choice for this data set. A very appealing feature of the post hoc approach is that it lets the user of the procedure choose the number of top genes that they will consider *after the data analysis is performed* (hence the name *post hoc*). In this particular example, a user can choose *after looking at the above plot* between reporting first `r ntops[1]` genes (among which with high probability, there is no false positive ), and the first `r ntops[3]` genes (among which with high probability, there are at most `r max_FP[ntops[3]]` false positives, ie the FDP is less than `r round(max_FP[ntops[3]]/ntops[3], 2)`%).  If the user is interested in a list in which the proportion of false positives is less than `r q` with high probability, then they can read from the above plot that the top `r Kprop` genes have this property.
-
-In contrast, the FDR approach is not post hoc. Specifically, once the BH procedure has been applied at a given level, the only information we have is about one single list of `r nBH` genes. In particular, if we are interested in "top $k$" lists with $k \neq$ `r nBH`, the only thing we can say is that the FDR in a list with $k <$ `r nBH` is less than `r q`, and that the FDR in a list with $k >$ `r nBH` is larger than `r q`.
+- among the top `r Kmin` genes, there is no false positive;
+- among the top `r Kprop` genes, the proportion of false positives is less than `r q`;
 
 # Inference on data-driven sets of genes
 
@@ -290,11 +264,10 @@ We plot the obtained lower bound on the number of true positives as a function o
   
   
 ```{r plot-bound-data-TP , echo=FALSE}
-library("ggplot2")
 p <- ggplot(stats, aes(y = Sbar, x = R, group = method, color = method)) +
   geom_line(na.rm = TRUE) + 
-  ylab("Lower bound on the #TP") + xlab("Number of variables selected")
-p
+  ylab("Lower bound on #TP") + xlab("Number of variables selected")
+ggplotly(p)
 ```
 
 With the same data, we can plot the corresponding upper bound on the False Discovery Proportion:
@@ -303,9 +276,9 @@ With the same data, we can plot the corresponding upper bound on the False Disco
 q <- 0.2
 p <- ggplot(stats, aes(y = FDPbar, x = R, group = method, color = method)) +
   geom_line(na.rm = TRUE) + 
-  ylab("Upper bound on the FDP") + xlab("Number of variables selected") +
+  ylab("Upper bound on FDP") + xlab("Number of variables selected") +
   geom_hline(yintercept = q, linetype = "dotted")
-p
+ggplotly(p)
 ```
 
 
